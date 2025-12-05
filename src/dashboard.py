@@ -83,49 +83,58 @@ tab4 = st.tabs(["Interactive Map"])[0]
 with tab4:
     st.header("Traffic & Transit Map")
     
-    # API Token Input
-    api_token = st.text_input("Enter Map API Token (Optional)", value="1afe2a24-267b-421c-bcd3-ae62c34c4aa7")
-    
-    import pydeck as pdk
-    
+    import streamlit.components.v1 as components
+    import json
+
     # Prepare Subway Data for Map
     # We need unique stations with lat/lon and aggregated ridership
     station_map_data = subway_df.groupby(['station_complex', 'latitude', 'longitude'])['ridership'].sum().reset_index()
     
-    # Normalize ridership for circle size
-    station_map_data['radius'] = station_map_data['ridership'] / station_map_data['ridership'].max() * 1000
-    
-    # PyDeck Layer
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        station_map_data,
-        get_position='[longitude, latitude]',
-        get_color='[200, 30, 0, 160]',
-        get_radius='radius',
-        pickable=True,
-    )
-    
-    # View State
-    view_state = pdk.ViewState(
-        latitude=40.7128,
-        longitude=-74.0060,
-        zoom=10,
-        pitch=50,
-    )
-    
-    # Render Map
-    # Note: If the token is for a specific provider (e.g. Mapbox), we pass it to pdk.Deck(api_keys={'mapbox': ...})
-    # But this UUID doesn't look like Mapbox. We'll use standard PyDeck which works without a token for basic styles.
-    # If the user wants to use it, we can try to pass it, but it might fail if invalid.
-    # We'll display it as a tooltip or just use it if we can identify the provider.
-    # For now, we'll stick to the default map style.
-    
-    st.pydeck_chart(pdk.Deck(
-        map_style='mapbox://styles/mapbox/light-v9',
-        initial_view_state=view_state,
-        layers=[layer],
-        tooltip={"text": "{station_complex}\nRidership: {ridership}"}
-    ))
-    
-    st.info("Note: The provided API token was not recognized as a standard Mapbox token. The map is rendered using default styles.")
+    # Convert data to JSON for injection into JS
+    stations_json = station_map_data.to_json(orient='records')
+
+    # Leaflet HTML
+    leaflet_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>NYC Transit Map</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+        <style>
+            #map {{ height: 600px; width: 100%; }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+        <script>
+            var map = L.map('map').setView([40.7128, -74.0060], 11);
+
+            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }}).addTo(map);
+
+            var stations = {stations_json};
+
+            stations.forEach(function(station) {{
+                var radius = Math.sqrt(station.ridership) / 50; // Simple scaling
+                if (radius < 5) radius = 5; // Min size
+                
+                L.circleMarker([station.latitude, station.longitude], {{
+                    color: 'red',
+                    fillColor: '#f03',
+                    fillOpacity: 0.5,
+                    radius: radius
+                }}).addTo(map)
+                .bindPopup("<b>" + station.station_complex + "</b><br>Ridership: " + station.ridership.toLocaleString());
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+    components.html(leaflet_html, height=600)
 
